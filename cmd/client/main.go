@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -43,11 +41,53 @@ func main() {
 	fmt.Printf("Queue %v declared and bound!\n", queue.Name)
 
 	// Create a new game state
-	gameState := gamelogic.NewGameState(username)
+	gamestate := gamelogic.NewGameState(username)
 
-	// wait for ctrl+c
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
-	<-signalChan
-	fmt.Println("Peril client is shutting down...")
+	// Show client's user available commands
+	gamelogic.PrintClientHelp()
+
+	// Start the REPL loop
+	for {
+		// Get inputs from the user
+		inputs := gamelogic.GetInput()
+
+		// If no input, continue to next iteration
+		if len(inputs) == 0 {
+			continue
+		}
+
+		// Check for inputs first word
+		switch inputs[0] {
+		// If input is spawn,
+		case "spawn":
+			err = gamestate.CommandSpawn(inputs)
+			if err != nil {
+				log.Println(err)
+			}
+		// If input is move,
+		case "move":
+			_, err = gamestate.CommandMove(inputs)
+			if err != nil {
+				log.Println(err)
+			}
+			fmt.Println("move successful")
+		// If input is status,
+		case "status":
+			gamestate.CommandStatus()
+		// If input is help, print all available commands
+		case "help":
+			gamelogic.PrintClientHelp()
+		// If input is spam, print that it's not allowed
+		case "spam":
+			fmt.Println("Spamming not allowed yet!")
+		// If input is quit, exit the REPL client
+		case "quit":
+			gamelogic.PrintQuit()
+			return
+		// If input is anything else
+		default:
+			fmt.Println("unknown command")
+			fmt.Println("type 'help' for a list of available commands")
+		}
+	}
 }

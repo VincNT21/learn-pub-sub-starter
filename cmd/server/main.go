@@ -26,9 +26,10 @@ func main() {
 		log.Fatalf("could not create connection channel: %v", err)
 	}
 
-	// Rune the PrintServerHelp function
+	// Show server's user available commands
 	gamelogic.PrintServerHelp()
 
+	// Start the REPL loop
 	for {
 		// Get inputs from the user
 		inputs := gamelogic.GetInput()
