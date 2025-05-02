@@ -21,27 +21,46 @@ func main() {
 	defer connection.Close()
 	fmt.Println("Peril game client connected to RabbitMQ!")
 
+	// Create a publish channel
+	publishCh, err := connection.Channel()
+	if err != nil {
+		log.Fatalf("could not create cannel: %v", err)
+	}
+
 	// Prompt the user for a username
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
 		log.Fatalf("could not get username: %v", err)
 	}
 
-	// Declare and bind a transient queue (using pubsub function)
-	_, queue, err := pubsub.DelareAndBind(
+	// Create a new game state
+	gamestate := gamelogic.NewGameState(username)
+
+	// Subscribe to pause queue
+	err = pubsub.SubscribeJSON(
 		connection,
 		routing.ExchangePerilDirect,
-		routing.PauseKey+"."+username,
+		routing.PauseKey+"."+gamestate.GetUsername(),
 		routing.PauseKey,
-		0, // transient queue
+		pubsub.SimpleQueueTransient,
+		handlerPause(gamestate),
 	)
 	if err != nil {
 		log.Fatalf("could not suscribe to pause: %v", err)
 	}
-	fmt.Printf("Queue %v declared and bound!\n", queue.Name)
 
-	// Create a new game state
-	gamestate := gamelogic.NewGameState(username)
+	// Subscribe to army_moves queue
+	err = pubsub.SubscribeJSON(
+		connection,
+		routing.ExchangePerilTopic,
+		routing.ArmyMovesPrefix+"."+gamestate.GetUsername(),
+		routing.ArmyMovesPrefix+".*",
+		pubsub.SimpleQueueTransient,
+		handlerMove(gamestate),
+	)
+	if err != nil {
+		log.Fatalf("could not suscribe to army_moves: %v", err)
+	}
 
 	// Show client's user available commands
 	gamelogic.PrintClientHelp()
@@ -63,14 +82,28 @@ func main() {
 			err = gamestate.CommandSpawn(inputs)
 			if err != nil {
 				log.Println(err)
+				continue
 			}
 		// If input is move,
 		case "move":
-			_, err = gamestate.CommandMove(inputs)
+			move, err := gamestate.CommandMove(inputs)
 			if err != nil {
 				log.Println(err)
+				continue
 			}
-			fmt.Println("move successful")
+			// Publish the move
+			err = pubsub.PublishJson(
+				publishCh,
+				routing.ExchangePerilTopic,
+				routing.ArmyMovesPrefix+"."+gamestate.GetUsername(),
+				move,
+			)
+			if err != nil {
+				fmt.Printf("error: %s\n", err)
+				continue
+			}
+
+			fmt.Println("Moved %v units to %s\n", len(move.Units), move.ToLocation)
 		// If input is status,
 		case "status":
 			gamestate.CommandStatus()

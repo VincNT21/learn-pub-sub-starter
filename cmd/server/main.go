@@ -26,6 +26,19 @@ func main() {
 		log.Fatalf("could not create connection channel: %v", err)
 	}
 
+	// Declare and bind a topic queue
+	_, queue, err := pubsub.DelareAndBind(
+		connection,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		routing.GameLogSlug+".*",
+		pubsub.SimpleQueueDurable,
+	)
+	if err != nil {
+		log.Fatalf("could not suscribe to gameLogs: %v", err)
+	}
+	fmt.Printf("Queue %v declared and bound!\n", queue.Name)
+
 	// Show server's user available commands
 	gamelogic.PrintServerHelp()
 
