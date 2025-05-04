@@ -1,8 +1,11 @@
 package pubsub
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -14,6 +17,12 @@ type SimpleQueueType int
 const (
 	SimpleQueueDurable SimpleQueueType = iota
 	SimpleQueueTransient
+)
+
+const (
+	Ack Acktype = iota
+	NackRequeue
+	NackDiscard
 )
 
 func DelareAndBind(
@@ -34,7 +43,9 @@ func DelareAndBind(
 		simpleQueueType != SimpleQueueDurable, // autoDelete should only be true if simpleQueueType is transient
 		simpleQueueType != SimpleQueueDurable, // exclusive should only be true if simpleQueueType is transient
 		false,                                 // no-wait
-		nil,                                   // arguments
+		amqp.Table{ // arguments
+			"x-dead-letter-exchange": "peril_dlx",
+		},
 	)
 	if err != nil {
 		return nil, amqp.Queue{}, fmt.Errorf("could not declare queue: %v", err)
@@ -62,31 +73,105 @@ func SubscribeJSON[T any](
 	queueName,
 	key string,
 	simpleQueueType SimpleQueueType,
-	handler func(T),
+	handler func(T) Acktype,
+) error {
+
+	return subscribe(
+		conn,
+		exchange,
+		queueName,
+		key,
+		simpleQueueType,
+		handler,
+		func(data []byte) (T, error) {
+			var target T
+			err := json.Unmarshal(data, target)
+			return target, err
+		},
+	)
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType SimpleQueueType,
+	handler func(T) Acktype,
+) error {
+	return subscribe(
+		conn,
+		exchange,
+		queueName,
+		key,
+		simpleQueueType,
+		handler,
+		func(data []byte) (T, error) {
+			buffer := bytes.NewBuffer(data)
+			decoder := gob.NewDecoder(buffer)
+			var target T
+			err := decoder.Decode(&target)
+			return target, err
+		},
+	)
+}
+
+func subscribe[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType SimpleQueueType,
+	handler func(T) Acktype,
+	unmarshaller func([]byte) (T, error),
 ) error {
 	// make sure that the given queue exists and is bound to the exchange
 	ch, _, err := DelareAndBind(conn, exchange, queueName, key, simpleQueueType)
 	if err != nil {
 		return err
 	}
+
+	// Set the prefetch count
+	err = ch.Qos(10, 0, false)
+
 	// Get a new chan onf amqp.Delivery structs
-	newChan, err := ch.Consume(queueName, "", false, false, false, false, nil)
+	newChan, err := ch.Consume(
+		queueName, // queue
+		"",        // consumer
+		false,     // auto-ack
+		false,     // exclusive
+		false,     // no-local
+		false,     // no-wait
+		nil,       // args
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not consume messages: %v", err)
 	}
 
 	// Start a goroutine that ranges over the channel of deliveries
 	go func() {
-		for delivery := range newChan {
+		for msg := range newChan {
 			// Unmarshal the body of each message into the T type
-			var data T
-			json.Unmarshal(delivery.Body, &data)
+			data, err := unmarshaller(msg.Body)
+			if err != nil {
+				log.Printf("error with unmarshal message: %v\n", err)
+			}
 
 			// Call the handler function
-			handler(data)
+			acktype := handler(data)
 
-			// Acknowledge the message to remove it from the queue
-			delivery.Ack(false)
+			// Acknowledge the message depending of acktype
+			switch acktype {
+			case Ack:
+				log.Println("Message Ack")
+				msg.Ack(false)
+			case NackRequeue:
+				log.Println("Message NackRequeue")
+				msg.Nack(false, true)
+			case NackDiscard:
+				log.Println("Message NackDiscard")
+				msg.Nack(false, false)
+			}
 		}
 	}()
 

@@ -27,17 +27,17 @@ func main() {
 	}
 
 	// Declare and bind a topic queue
-	_, queue, err := pubsub.DelareAndBind(
+	err = pubsub.SubscribeGob(
 		connection,
 		routing.ExchangePerilTopic,
 		routing.GameLogSlug,
 		routing.GameLogSlug+".*",
 		pubsub.SimpleQueueDurable,
+		handlerLogs(),
 	)
 	if err != nil {
-		log.Fatalf("could not suscribe to gameLogs: %v", err)
+		log.Fatalf("could not start consuming logs: %v", err)
 	}
-	fmt.Printf("Queue %v declared and bound!\n", queue.Name)
 
 	// Show server's user available commands
 	gamelogic.PrintServerHelp()
